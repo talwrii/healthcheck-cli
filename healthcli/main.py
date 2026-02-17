@@ -100,12 +100,13 @@ def check_status(check):
         overdue = age - every
         return False, f"OVERDUE {format_duration(int(overdue))}"
 
-    return True, format_ago(last_ok)
+    return True, format_ago(check.get("service_ran", last_ok))
 
 
 def cmd_add(args):
     every = None
     name = None
+    sdtimer = None
     command = []
     i = 0
     while i < len(args):
@@ -115,33 +116,52 @@ def cmd_add(args):
         elif args[i] == "--name" and i + 1 < len(args):
             name = args[i + 1]
             i += 2
+        elif args[i] == "--sdtimer" and i + 1 < len(args):
+            sdtimer = args[i + 1]
+            i += 2
         else:
             command.append(args[i])
             i += 1
 
-    if not command:
+    if not command and not sdtimer:
         print("Usage: hccli add --every <duration> [--name <n>] <command> [args...]", file=sys.stderr)
+        print("       hccli add --every <duration> --sdtimer <service> [--name <n>]", file=sys.stderr)
         sys.exit(1)
 
     if every is None:
         print("Missing --every", file=sys.stderr)
         sys.exit(1)
 
-    if name is None:
-        name = Path(command[0]).name
-
-    checks = load_checks()
-    checks[name] = {
-        "command": command,
-        "every": every,
-        "last_run": None,
-        "last_ok": None,
-        "last_fail": None,
-        "fail_msg": None,
-        "created": time.time(),
-    }
-    save_checks(checks)
-    print(f"✓ Added '{name}' (every {format_duration(every)}): {' '.join(command)}")
+    if sdtimer:
+        if name is None:
+            name = sdtimer
+        checks = load_checks()
+        checks[name] = {
+            "sdtimer": sdtimer,
+            "every": every,
+            "last_run": None,
+            "last_ok": None,
+            "last_fail": None,
+            "fail_msg": None,
+            "created": time.time(),
+        }
+        save_checks(checks)
+        print(f"✓ Added '{name}' (every {format_duration(every)}): systemd timer {sdtimer}")
+    else:
+        if name is None:
+            name = Path(command[0]).name
+        checks = load_checks()
+        checks[name] = {
+            "command": command,
+            "every": every,
+            "last_run": None,
+            "last_ok": None,
+            "last_fail": None,
+            "fail_msg": None,
+            "created": time.time(),
+        }
+        save_checks(checks)
+        print(f"✓ Added '{name}' (every {format_duration(every)}): {' '.join(command)}")
 
 
 def cmd_rm(args):
@@ -162,10 +182,15 @@ def cmd_rm(args):
 
 def run_check(name, check):
     """Run a single check command, return (ok, message)"""
-    command = check["command"]
     now = time.time()
     check["last_run"] = now
 
+    # Systemd timer check
+    sdtimer = check.get("sdtimer")
+    if sdtimer:
+        return run_sdtimer_check(name, check, sdtimer, now)
+
+    command = check["command"]
     try:
         result = subprocess.run(
             command,
@@ -195,6 +220,60 @@ def run_check(name, check):
         check["last_fail"] = now
         check["fail_msg"] = "timeout (300s)"
         return False, "timeout (300s)"
+    except Exception as e:
+        check["last_fail"] = now
+        check["fail_msg"] = str(e)
+        return False, str(e)
+
+
+def run_sdtimer_check(name, check, service, now):
+    """Check a systemd user service ran successfully and recently"""
+    every = check["every"]
+
+    try:
+        # Get result
+        r = subprocess.run(
+            ["systemctl", "--user", "show", "-p", "Result", "--value", f"{service}.service"],
+            capture_output=True, text=True,
+        )
+        result = r.stdout.strip()
+
+        # Get last finish time
+        r = subprocess.run(
+            ["systemctl", "--user", "show", "-p", "ExecMainExitTimestamp", "--value", f"{service}.service"],
+            capture_output=True, text=True,
+        )
+        timestamp_str = r.stdout.strip()
+
+        if not timestamp_str:
+            check["last_fail"] = now
+            check["fail_msg"] = "never run"
+            return False, "never run"
+
+        # Parse timestamp
+        r = subprocess.run(
+            ["date", "-d", timestamp_str, "+%s"],
+            capture_output=True, text=True,
+        )
+        epoch = int(r.stdout.strip())
+        age = now - epoch
+
+        if result != "success":
+            check["last_fail"] = now
+            check["fail_msg"] = f"result={result}"
+            return False, f"result={result}"
+
+        if age > every:
+            check["last_fail"] = now
+            check["fail_msg"] = f"last run {format_duration(int(age))} ago"
+            return False, f"last run {format_duration(int(age))} ago"
+
+        check["last_ok"] = now
+        check["last_fail"] = None
+        check["fail_msg"] = None
+        check["service_ran"] = epoch
+        return True, f"ok (ran {format_ago(epoch)})"
+
     except Exception as e:
         check["last_fail"] = now
         check["fail_msg"] = str(e)
@@ -258,8 +337,11 @@ def cmd_status(args):
         if not oneline and not quiet:
             icon = "✅" if ok else "❌"
             every = format_duration(check["every"])
-            cmd = " ".join(check["command"])
-            print(f"{icon} {name:<20} {msg:<25} (every {every}) [{cmd}]")
+            if "sdtimer" in check:
+                src = f"[sdtimer: {check['sdtimer']}]"
+            else:
+                src = f"[{' '.join(check['command'])}]"
+            print(f"{icon} {name:<20} {msg:<25} (every {every}) {src}")
 
     if oneline:
         total = ok_count + fail_count
@@ -279,9 +361,12 @@ def cmd_list(args):
         return
     for name, check in sorted(checks.items()):
         every = format_duration(check["every"])
-        cmd = " ".join(check["command"])
+        if "sdtimer" in check:
+            src = f"sdtimer: {check['sdtimer']}"
+        else:
+            src = " ".join(check["command"])
         created = datetime.fromtimestamp(check["created"]).strftime("%Y-%m-%d")
-        print(f"  {name:<20} every {every:<10} {cmd} (added {created})")
+        print(f"  {name:<20} every {every:<10} {src} (added {created})")
 
 
 def cmd_edit(args):
@@ -413,6 +498,7 @@ def show_help():
     print("Commands:")
     print("  (no command)                       Show status")
     print("  add --every <dur> [--name <n>] <cmd> [args]")
+    print("  add --every <dur> --sdtimer <service> [--name <n>]")
     print("                                     Add a check")
     print("  rm <n>                             Remove a check")
     print("  run [name] [--force]               Run due checks (or all with --force)")
@@ -429,6 +515,7 @@ def show_help():
     print()
     print("Examples:")
     print("  hccli add --every 25h backup-home")
+    print("  hccli add --every 25h --sdtimer backup-home")
     print("  hccli add --every 5m false")
     print("  hccli add --every 1h --name web curl -sf https://example.com")
     print("  hccli run")

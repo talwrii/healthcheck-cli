@@ -326,6 +326,85 @@ def cmd_reset(args):
     print(f"✓ Reset '{name}'")
 
 
+def cmd_install(args):
+    """Install systemd user timer to run hccli run"""
+    import shutil
+
+    every = "5m"
+    i = 0
+    while i < len(args):
+        if args[i] == "--every" and i + 1 < len(args):
+            every = args[i + 1]
+            i += 2
+        else:
+            i += 1
+
+    # Convert to systemd OnCalendar or OnUnitActiveSec format
+    secs = parse_duration(every)
+    if secs < 60:
+        interval = f"{secs}s"
+    elif secs < 3600:
+        interval = f"{secs // 60}m"
+    elif secs < 86400:
+        interval = f"{secs // 3600}h"
+    else:
+        interval = f"{secs // 86400}d"
+
+    hccli_path = shutil.which("hccli")
+    if not hccli_path:
+        hccli_path = sys.argv[0]
+
+    unit_dir = Path.home() / ".config" / "systemd" / "user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+
+    service = unit_dir / "hccli.service"
+    timer = unit_dir / "hccli.timer"
+
+    service.write_text(f"""[Unit]
+Description=Run hccli healthchecks
+
+[Service]
+Type=oneshot
+ExecStart={hccli_path} run
+""")
+
+    timer.write_text(f"""[Unit]
+Description=Run hccli healthchecks every {interval}
+
+[Timer]
+OnBootSec=1m
+OnUnitActiveSec={interval}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+""")
+
+    subprocess.run(["systemctl", "--user", "daemon-reload"])
+    subprocess.run(["systemctl", "--user", "enable", "--now", "hccli.timer"])
+
+    print(f"✓ Installed systemd user timer (every {interval})")
+    print(f"  Service: {service}")
+    print(f"  Timer:   {timer}")
+    print(f"  Command: {hccli_path} run")
+    print()
+    print("Check with: systemctl --user status hccli.timer")
+
+
+def cmd_uninstall(args):
+    """Remove systemd user timer"""
+    subprocess.run(["systemctl", "--user", "disable", "--now", "hccli.timer"])
+
+    unit_dir = Path.home() / ".config" / "systemd" / "user"
+    for f in ["hccli.service", "hccli.timer"]:
+        p = unit_dir / f
+        if p.exists():
+            p.unlink()
+
+    subprocess.run(["systemctl", "--user", "daemon-reload"])
+    print("✓ Uninstalled systemd user timer")
+
+
 def show_help():
     print("hccli - simple local healthcheck CLI")
     print()
@@ -343,6 +422,8 @@ def show_help():
     print("  list                               List checks")
     print("  edit <n> --every <dur>             Update check interval")
     print("  reset <n>                          Clear run history")
+    print("  install [--every <dur>]            Install systemd timer (default: 5m)")
+    print("  uninstall                          Remove systemd timer")
     print()
     print("Durations: 30m, 1h, 25h, 1d, 1d12h, 1w")
     print()
@@ -375,6 +456,8 @@ def main():
         "ls": cmd_list,
         "edit": cmd_edit,
         "reset": cmd_reset,
+        "install": cmd_install,
+        "uninstall": cmd_uninstall,
         "help": lambda a: show_help(),
         "--help": lambda a: show_help(),
         "-h": lambda a: show_help(),

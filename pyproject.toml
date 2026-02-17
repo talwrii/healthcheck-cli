@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=68.0"]
+requires = [ "setuptools>=68.0",]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "healthcli"
-version = "1.0.0"
+version = "2.0.0"
 description = "Simple local dead man's switch for cron jobs and scheduled tasks"
 readme = "README.md"
 license = "MIT"

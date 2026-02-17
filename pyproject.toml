@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "healthcheck-cli"
+version = "0.1.0"
+description = "Simple local dead man's switch for cron jobs and scheduled tasks"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.8"
+
+[project.scripts]
+hccli = "healthcheck_cli.main:main"

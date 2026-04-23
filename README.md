@@ -1,7 +1,7 @@
 # health-cli
-Run some checks periodically locally on your machine. Provide an interface for the status of the checks. Status inteface checks timestamps and is moderately robust.
+Run some checks periodically locally on your machine. Provide an interface for the status of these checks. The status inteface checks timestamps and is moderately robust (tries not to hide errors)
 
-This is AI-generated and unreviewed code... for now. Also very young so liabe to change
+This is AI-generated and unreviewed code... for now. Also very young so liable to change but nothing like this existed.
 
 ## Motivation
 Why is there nothing that does this already? I don't want to use docker or some onine services
@@ -10,14 +10,15 @@ Why is there nothing that does this already? I don't want to use docker or some 
 There are tools like monit and sentry. `cron` sends emails when things fail.
 
 ## Installation
-pipx install healthcli
+``pipx install healthcli```
 
 ## Usage
-Set up a job
-`hccli add --every 1m curl website`
+Set up a check: `hccli add --every 1m curl website` and then in a cron job or systemd timer run `hccli run` periodcally
 
-In cron job or systemd job: `hccli run`
-
-To check run: `hccli`. I have this run in a [plasma-applet-commandoutput](https://github.com/Zren/plasma-applet-commandoutput) KDE widget which I set up with my tool kde-panel.
+To check status of all checks run: `hccli`. I have this run in a [plasma-applet-commandoutput](https://github.com/Zren/plasma-applet-commandoutput) KDE widget which I set up with my tool kde-panel.
 
 If you have a systemd timer  you can use `hccli add --every 25h --sdtimer backup-home` to ensure that the timer runs every 25h.
+
+## Debugging 
+If hccli is not running as expected you can run `hccli log` to see the logs of past `hccli` runs.
+
